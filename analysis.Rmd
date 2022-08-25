@@ -1,0 +1,129 @@
+---
+title: "analysis"
+author: "Dan Weinberger"
+date: '2022-08-25'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(gee)
+library(mgcv)
+```
+
+```{r}
+# a1 <- read_excel('./Data/CONFIDENTIAL/flu_data_stats.xlsx', sheet='flu1')
+# 
+# a2 <- read_excel('./Data/CONFIDENTIAL/flu_data_stats.xlsx', sheet='flu2')
+# 
+# b1 <- bind_rows(a1,a2)
+#saveRDS(b1,'./Data/combined_data.rds')
+```
+
+```{r}
+b1 <- readRDS('./Data/combined_data.rds') %>%
+  mutate( agecat = as.factor(if_else(age<60, 0, 1)),
+          agecat2 = as.factor(if_else(age<60, 0, if_else(age<80,1,2))),
+          Year = as.factor(Year),
+          id=as.factor(id),
+          center=as.factor(substr(full_id,1,1)),
+          piab_pos = if_else(piaB<40,1,0),
+          lyta_pos = if_else(extlytA<40,1,0),
+          true_pos = piab_pos*lyta_pos,
+          false_pos = if_else(piab_pos==0 & lyta_pos==1,1,0 ) )
+
+table(b1$agecat2, b1$agecat2)
+```
+
+
+```{r}
+b1 %>%
+  group_by(agecat) %>%
+  summarize(prev_piab=mean(piab_pos, na.rm=T), N_pos_piab=sum(piab_pos, na.rm=T), prev_false_pos=mean(false_pos, na.rm=T)  )
+  
+```
+
+
+```{r}
+
+mod1 <- glm(piab_pos ~ agecat + Year, family='binomial', data=b1)
+
+summary(mod1)
+
+#ODDS RATIO for the covariates
+exp(coef(mod1))
+```
+
+GEE
+```{r}
+mod2 <- gee(piab_pos ~ agecat + Year, family='binomial', data=b1, id=id)
+
+summary(mod2)
+
+
+#Effect of age:
+age_lcl = -0.6093049 - 1.96*0.5540318
+age_ucl = -0.6093049 + 1.96*0.5540318
+
+age_or <- exp(c(-0.6093049, age_lcl, age_ucl))
+age_or
+```
+```{r}
+hist(b1$age)
+```
+
+Spline for age 
+
+```{r}
+mod3 <- mgcv::gam(piab_pos ~ s(age) + Year, family='binomial', data=b1)
+summary(mod3)
+
+plot(mod3, bty='l')
+abline(h=0, lty=1, col='red')
+```
+Linear spline for age after 64
+
+```{r}
+
+b2 <- b1 %>%
+  mutate(age_spline = age-63, age_spline=if_else(age_spline<0,0,age_spline))
+
+
+mod4 <- gee(piab_pos ~ age_spline + Year, family='binomial', data=b2, id=id)
+
+summary(mod4)
+
+#Effect of age per 10 unit increase after age 64:
+age_lcl = -0.05757219 - 1.96*(0.02754007)
+age_ucl = -0.05757219+ 1.96*(0.02754007 )
+
+age_or_10yr <- exp(10*c(-0.05757219, age_lcl, age_ucl))
+age_or_10yr
+
+#Comparing odds in a 64 year old and 96 year old
+age_or_33yr <- exp(33*c(-0.05757219, age_lcl, age_ucl))
+age_or_33yr
+```
+3 age categories (<40, 63-80, 80+)
+```{r}
+
+mod5 <- gee(piab_pos ~ agecat2 + Year, family='binomial', data=b1, id=id)
+
+summ_mod5 <- summary(mod5)
+
+odds_age <- summ_mod5$coefficients %>%
+  as.data.frame() %>%
+  select(Estimate, `Robust S.E.`) %>%
+  rename(SE=`Robust S.E.`) %>%
+  mutate(OR=round(exp(Estimate),2), 
+         OR_LCL=round(exp(Estimate-1.96*SE),2),
+         OR_UCL=round(exp(Estimate+1.96*SE ),2)) %>%
+  select(OR, OR_LCL, OR_UCL)
+
+odds_age
+```
+
+
